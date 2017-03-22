@@ -1,0 +1,99 @@
+#!/usr/bin/groovy
+
+// Make sure the proxy is correct
+def proxy = System.getenv('http_proxy')
+if (!System.properties.proxyHost && proxy) {
+    System.properties.proxyHost = proxy.toURL().host;
+}
+if (!System.properties.proxyPort && proxy) {
+    System.properties.proxyPort = proxy.toURL().port;
+}
+
+// Define the output formats
+def formats = [
+    id: {
+        println it.id
+    },
+    mvn: {
+        println """<dependency>
+    <groupId>${it.g}</groupId>
+    <artifactId>${it.a}</artifactId>
+    <version>${it.v}</version>
+</dependency>"""
+    },
+    json: {},
+    ivy: {
+        println "<dependency org=\"${it.g}\" name=\"${it.a}\" rev=\"${it.v}\"/>"
+    },
+    buildr: {
+        println it.id
+    },
+    gradle: {
+        println "compile '${it.id}'"
+    },
+    sbt: {
+        println "libraryDependencies += \"${it.g}\" % \"${it.a}\" % \"${it.v}\""
+    },
+    grape: {
+        println """@Grapes(
+    @Grab(group='${it.g}', module='${it.a}', version='${it.v}')
+)"""
+    }
+]
+
+def cli = new CliBuilder(usage: "mavenSearch [-g group] [-a artifact] [-v version] [-n results] \n[-o format] className")
+cli.with {
+    h longOpt: 'help', 'Show usage information'
+    g longOpt: 'group', args: 1, 'Filter by group'
+    a longOpt: 'artifact', args: 1, 'Filter by artifact'
+    v longOpt: 'version', args: 1, 'Filter by version'
+    n longOpt: 'number', args: 1, 'Number of results to fetch'
+    o longOpt: 'output', args: 1, "Output as [${formats.keySet().join('|')}]"
+}
+
+def options = cli.parse(args)
+if (!options || options.h) {
+    println """Maven search is a quick utility that searches maven central for artifacts.
+It is intended to be used to search by classname for a maven dependency.
+"""
+    cli.usage()
+    return
+}
+
+def outputAs = options.o ?: 'id'
+if (!formats.keySet().contains(outputAs)) {
+    cli.usage()
+    return
+}
+
+def args = options.arguments()
+if (!args[0]) {
+    cli.usage()
+    return
+}
+
+def query = "q=fc:%22${args[0]}%22"
+
+if (options.g) {
+    query = "${query}%20AND%20g:\"${options.g}\""
+}
+if (options.a) {
+    query = "${query}%20AND%20a:\"${options.a}\""
+}
+if (options.v) {
+    query = "${query}%20AND%20v:\"${options.v}\""
+}
+
+def rows = options.n ?: 1
+
+def res = "http://search.maven.org/solrsearch/select?${query}&rows=${rows}".toURL().text
+
+def slurper = new groovy.json.JsonSlurper()
+res = slurper.parseText(res)
+
+if (outputAs == 'json') {
+    println new groovy.json.JsonBuilder(res).toPrettyString()
+} else {
+    res.response.docs.each formats[outputAs]
+}
+
